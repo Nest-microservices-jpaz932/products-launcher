@@ -28,6 +28,52 @@ services:
       - POSTGRES_PASSWORD=123456
       - POSTGRES_DB=ordersdb
 
+  auth-database:
+    image: mongo:latest
+    restart: always
+    volumes:
+      - ./auth-microservice/mongo:/data/db
+    ports:
+      - 27017:27017
+    environment:
+      - MONGO_INITDB_DATABASE=${MONGO_INITDB_DATABASE}
+    command: "mongod --replSet rs0 --bind_ip_all"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --eval 'db.adminCommand(\"ping\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  mongodb-setup:
+    image: mongo:latest
+    restart: "no"
+    depends_on:
+      auth-database:
+        condition: service_healthy
+    command: >
+      mongosh --host auth-database:27017 --eval '
+        try {
+          rs.status();
+        } catch (e) {
+          rs.initiate({
+            _id: "rs0",
+            members: [{ _id: 0, host: "auth-database:27017", priority: 1 }]
+          });
+        }
+      '
+
+  auth-microservice:
+    build: ./auth-microservice
+    volumes:
+      - ./auth-microservice/src:/usr/src/app/src
+    command: npm run start:dev
+    environment:
+      - PORT=${AUTH_MICROSERVICE_PORT}
+      - NATS_SERVERS=nats://nats-server:4222
+      - DATABASE_URL=${AUTH_DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+
   products-microservice:
     build: ./products-microservice
     ports:
